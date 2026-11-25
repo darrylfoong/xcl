@@ -1372,11 +1372,12 @@ fn precompile(input: &Input, limit: usize, windows: u32, split: Option<bool>, on
                 }
                 let (name, blob) = input.get(i);
                 let Some(blob) = blob else { continue };
-                let Some(sh) = xbox::parse(&blob) else { continue };
-                if only.is_some_and(|o| !sh.stage.eq_ignore_ascii_case(o)) {
+                let Some(header) = xbox::find_xdat(&blob) else { continue };
+                if only.is_some_and(|o| !header.stage().eq_ignore_ascii_case(o)) {
                     done.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
+                let sh = xbox::parse_xdat(header);
                 // a compute program as a title's pipeline translates it (`pso::console_to_dxil_in`):
                 // into the translation cache too, so the title does not translate it again
                 if sh.fssm.iter().any(|f| matches!(recomp::interface(&blob, &sh, f), Some(recomp::Mode::Compute(_)))) {

@@ -229,6 +229,8 @@ xcl rpf D:\data\shaders.rpf --extract NAME --out folder
 <details>
 <summary><b>Switches, caches, logs and the files XCL writes</b></summary>
 
+- `--precompile --only cs` reads the stage from each shader header and skips decompressing
+  native code for the other stages.
 - **`--pipelines` size cap**: a compute program whose DXIL is over 8 MiB and that has no saved
   blob is left to the runtime instead of being compiled in the pass — those compiles take tens
   of minutes and gigabytes and stopped the pass on the biggest programs. `XCL_PIPELINE_MAX_KB`

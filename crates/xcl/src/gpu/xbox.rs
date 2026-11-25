@@ -165,14 +165,30 @@ pub struct XboxShader {
     pub notes: Vec<String>,
 }
 
-/// (DXIL part, offset of XDAT inside it) – the cheap part of [`parse`].
-fn find_xdat(blob: &[u8]) -> Option<(super::shader::Part, usize)> {
+pub(crate) struct Xdat<'a> {
+    dxil: &'a [u8],
+    dxil_offset: usize,
+    xdat: usize,
+}
+
+impl Xdat<'_> {
+    pub(crate) fn stage(&self) -> std::borrow::Cow<'static, str> {
+        let kind = rd32(self.dxil, 0).unwrap_or(0) >> 16;
+        match DXIL_KINDS.get(kind as usize) {
+            Some(&name) => name.into(),
+            None => format!("kind#{kind}").into(),
+        }
+    }
+}
+
+/// Locate the console program header without inflating its native code variants.
+pub(crate) fn find_xdat(blob: &[u8]) -> Option<Xdat<'_>> {
     let parts = container_parts(blob)?;
     let dxil = parts.into_iter().find(|p| p.fourcc == "DXIL")?;
     let d = &blob[dxil.offset..dxil.offset + dxil.size];
     // XDAT normally sits right after the 24-byte program header
     let x = (0..d.len().min(256).saturating_sub(3)).step_by(4).find(|&o| &d[o..o + 4] == b"XDAT")?;
-    Some((dxil, x))
+    Some(Xdat { dxil: d, dxil_offset: dxil.offset, xdat: x })
 }
 
 /// Is this a console shader container (DXIL part carrying XDAT instead of bitcode)?
@@ -183,25 +199,29 @@ pub fn is_xbox(blob: &[u8]) -> bool {
 /// Parse a console shader container. `None` when the blob is not one (no DXBC container,
 /// no DXIL part or no XDAT inside it) – PC shaders included.
 pub fn parse(blob: &[u8]) -> Option<XboxShader> {
-    let (dxil, x) = find_xdat(blob)?;
-    let d = &blob[dxil.offset..dxil.offset + dxil.size];
+    find_xdat(blob).map(parse_xdat)
+}
+
+pub(crate) fn parse_xdat(header: Xdat<'_>) -> XboxShader {
+    let Xdat { dxil: d, dxil_offset, xdat: x } = header;
     let pv = rd32(d, 0).unwrap_or(0);
     let mut sh = XboxShader {
-        stage: DXIL_KINDS.get((pv >> 16) as usize).map(|s| s.to_string()).unwrap_or_else(|| format!("kind#{}", pv >> 16)),
+        stage: header.stage().into_owned(),
         shader_model: (((pv >> 4) & 0xf) as u8, (pv & 0xf) as u8),
-        dxil_offset: dxil.offset,
-        xdat_offset: dxil.offset + x,
+        dxil_offset,
+        xdat_offset: dxil_offset + x,
         ..Default::default()
     };
     if x != 0x18 {
         sh.notes.push(format!("XDAT at +{x:#x} in the DXIL part (expected +0x18)"));
     }
     match xdat_entries(d, x) {
-        Some(e) => sh.entries = e.into_iter().map(|(id, o, s)| XdatEntry { id, offset: dxil.offset + o, size: s }).collect(),
+        Some(e) => sh.entries = e.into_iter().map(|(id, o, s)| XdatEntry { id, offset: dxil_offset + o, size: s }).collect(),
         None => sh.notes.push("could not read the XDAT table".into()),
     }
     for e in &sh.entries {
-        let data = &blob[e.offset..e.offset + e.size];
+        let start = e.offset - dxil_offset;
+        let data = &d[start..start + e.size];
         if data.starts_with(b"XBCH") {
             if e.id != XDAT_XBCH {
                 sh.notes.push(format!("XBCH in an entry with unexpected id {:#x}", e.id));
@@ -216,7 +236,7 @@ pub fn parse(blob: &[u8]) -> Option<XboxShader> {
     if sh.fssm.is_empty() {
         sh.notes.push("no FSSM (native code) in the container".into());
     }
-    Some(sh)
+    sh
 }
 
 /// Read the XDAT table at `x` inside the DXIL part `d`; returns (id, offset in `d`, size).

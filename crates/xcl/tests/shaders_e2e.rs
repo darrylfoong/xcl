@@ -248,6 +248,25 @@ fn shaders_folder_recurses_and_skips_side_files() {
 }
 
 #[test]
+fn precompile_only_uses_the_container_stage_for_packed_variants() {
+    let dir = TempDir::new("precompile-only");
+    let path = dir.path().join("shaders.rpf");
+    let mut pack = b"9FPR".to_vec();
+    pack.resize(0x40, 0);
+    // The first record is a vertex shader with an ES variant, which precompile
+    // counts as paired at pipeline creation. Both record names give the wrong stage.
+    pack.extend(rpf9_record("PS_First", &xbox_shader(1, &[fssm(&CODE, &[(2, 0)])]), None));
+    pack.extend(rpf9_record("VS_Second", &xbox_shader(0, &[fssm(&CODE, &[(5, 1)])]), None));
+    std::fs::write(&path, pack).unwrap();
+
+    let out = run_shaders(&path, &["--precompile", "--only", "vS", "--split", "0"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{out:?}");
+    assert!(text.contains("precompiling 2 shaders"), "{text}");
+    assert!(text.contains("compiled 0, already cached 0, errors 0, skipped (GS – paired at pipeline creation) 1"), "{text}");
+}
+
+#[test]
 fn shaders_rpf9_pack_scans_records_and_counts_inflate_errors() {
     let dir = TempDir::new("rpf9");
     let pack_path = dir.path().join("shaders.rpf");
